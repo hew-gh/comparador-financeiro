@@ -5,62 +5,104 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Terminal Financeiro", layout="wide")
+st.set_page_config(page_title="Bloomberg Clone - Performance", layout="wide")
 
-# --- CABEÇALHO ---
-st.title("📊 Comparador de Performance")
-st.markdown("Compare ativos normalizados pela base 100.")
+st.title("📊 Comparador de Performance Financeira")
+st.markdown("Compare o rendimento acumulado de ativos (Base 100).")
 
-# --- BARRA LATERAL (INPUTS) ---
-st.sidebar.header("Configurações do Filtro")
+# --- BARRA LATERAL ---
+st.sidebar.header("Configurações")
 
-# 1. Sugestão Automática de Papéis (Autocomplete)
-# Criamos uma lista de sugestões comuns para facilitar
+# Seleção de Ativos
 sugestoes = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'PETR4.SA', 'VALE3.SA', 'ITUB4.SA', '^BVSP', 'BTC-USD']
-papeis_selecionados = st.sidebar.multiselect(
-    "Escolha os ativos:", 
-    options=sugestoes + ["Adicione outros..."], 
-    default=['AAPL', '^BVSP']
-)
+papeis_selecionados = st.sidebar.multiselect("Selecione os ativos:", options=sugestoes, default=['AAPL', '^BVSP'])
 
-# Se o usuário quiser digitar um que não está na lista
-input_manual = st.sidebar.text_input("Ou digite outros códigos (separados por vírgula):")
-if input_manual:
-    papeis_selecionados += [x.strip().upper() for x in input_manual.split(",")]
+# Campo para novos ativos (Autocomplete manual)
+novo_ativo = st.sidebar.text_input("Adicionar outro (ex: NVDA, ETH-USD):")
+if novo_ativo:
+    ticker = novo_ativo.strip().upper()
+    if ticker not in papeis_selecionados:
+        papeis_selecionados.append(ticker)
 
-# 2. Ajuste de Período Personalizado
+# Datas
 col1, col2 = st.sidebar.columns(2)
 with col1:
-    data_inicio = st.date_input("Início:", datetime.now() - timedelta(days=365))
+    data_inicio = st.date_input("Início", value=datetime.now() - timedelta(days=365))
 with col2:
-    data_fim = st.date_input("Fim:", datetime.now())
+    data_fim = st.date_input("Fim", value=datetime.now())
 
-# --- LÓGICA DE PROCESSAMENTO ---
-if st.sidebar.button("Atualizar Comparação"):
-    if papeis_selecionados:
-        with st.spinner('Buscando dados no Yahoo Finance...'):
-            # Download
-            dados = yf.download(papeis_selecionados, start=data_inicio, end=data_fim)['Close']
+# --- FUNÇÃO DE CÁLCULO DE PERFORMANCE ---
+def calcular_retornos(dados):
+    resumo = []
+    for col in dados.columns:
+        serie = dados[col].dropna()
+        if len(serie) < 2: continue
+        
+        ultimo = serie.iloc[-1]
+        
+        # 30 Dias
+        alvo_30 = serie.index[-1] - timedelta(days=30)
+        val_30 = serie.asof(alvo_30) if alvo_30 >= serie.index[0] else serie.iloc[0]
+        ret_30 = (ultimo / val_30) - 1
+        
+        # YTD (Desde o início do ano atual)
+        inicio_ano = serie[serie.index.year == datetime.now().year]
+        ret_ytd = (ultimo / inicio_ano.iloc[0]) - 1 if not inicio_ano.empty else 0
+        
+        # 1 Ano
+        alvo_1y = serie.index[-1] - timedelta(days=365)
+        val_1y = serie.asof(alvo_1y) if alvo_1y >= serie.index[0] else serie.iloc[0]
+        ret_1y = (ultimo / val_1y) - 1
+        
+        # Período Total Selecionado
+        ret_total = (ultimo / serie.iloc[0]) - 1
+        
+        resumo.append({
+            "Ativo": col,
+            "30 Dias": ret_30,
+            "YTD": ret_ytd,
+            "1 Ano": ret_1y,
+            "Total Período": ret_total
+        })
+    return pd.DataFrame(resumo).set_index("Ativo")
+
+# --- EXECUÇÃO ---
+if papeis_selecionados:
+    with st.spinner('Buscando dados...'):
+        # Download (buscamos um pouco antes para garantir o cálculo de 1 ano se necessário)
+        df = yf.download(papeis_selecionados, start=data_inicio, end=data_fim)['Close']
+        
+        if not df.empty:
+            # Se for apenas um ativo, o pandas retorna uma Series, convertemos para DataFrame
+            if isinstance(df, pd.Series):
+                df = df.to_frame(name=papeis_selecionados[0])
             
-            if not dados.empty:
-                dados = dados.dropna()
-                
-                # Normalização
-                dados_norm = (dados / dados.iloc[0]) * 100
-                
-                # Gráfico Interativo
-                fig = go.Figure()
-                for col in (dados_norm.columns if len(papeis_selecionados) > 1 else [dados_norm.name]):
-                    fig.add_trace(go.Scatter(x=dados_norm.index, y=dados_norm[col], name=col))
-                
-                fig.update_layout(template="plotly_dark", hovermode="x unified", height=600)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Tabela de Performance (Abaixo do gráfico)
-                st.subheader("Tabela de Performance")
-                # (Aqui entraria a lógica de cores que fizemos antes, adaptada para o Streamlit)
-                st.dataframe(dados.pct_change().cumsum().iloc[[-1]].style.format("{:.2%}"))
-            else:
-                st.error("Nenhum dado encontrado para esses ativos/período.")
-    else:
-        st.warning("Selecione pelo menos um ativo.")
+            df = df.dropna()
+            
+            # Gráfico de Performance (Base 100)
+            df_norm = (df / df.iloc[0]) * 100
+            
+            fig = go.Figure()
+            for col in df_norm.columns:
+                fig.add_trace(go.Scatter(x=df_norm.index, y=df_norm[col], name=col))
+            
+            fig.update_layout(template="plotly_dark", hovermode="x unified", height=500,
+                              yaxis_title="Performance (Início = 100)")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Tabela de Performance Colorida
+            st.subheader("📊 Resumo de Performance (%)")
+            df_perf = calcular_retornos(df)
+            
+            def colorir_valor(val):
+                color = '#00ff00' if val > 0 else '#ff4b4b'
+                return f'color: {color}'
+
+            st.dataframe(
+                df_perf.style.applymap(colorir_valor).format("{:.2%}"),
+                use_container_width=True
+            )
+        else:
+            st.error("Nenhum dado encontrado para os ativos selecionados.")
+else:
+    st.info("Selecione ativos na barra lateral para começar.")
