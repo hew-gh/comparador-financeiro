@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="Terminal Financeiro", layout="wide")
 
 # --- CABEÇALHO ---
-st.title("📊 Comparador de Performance Estilo Bloomberg")
+st.title("📊 Comparador de Performance")
 st.markdown("Compare ativos normalizados pela base 100.")
 
 # --- BARRA LATERAL (INPUTS) ---
